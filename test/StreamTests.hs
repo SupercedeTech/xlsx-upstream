@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes       #-}
+{-# LANGUAGE PackageImports #-}
 {-# LANGUAGE TupleSections     #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
@@ -20,6 +21,7 @@ tests = testGroup
     []
 #else
 
+import qualified "zip" Codec.Archive.Zip as Zip
 import Control.Exception
 import Codec.Xlsx
 import Codec.Xlsx.Parser.Stream
@@ -32,6 +34,7 @@ import Control.Monad (void)
 import Data.Set.Lens
 import qualified Data.ByteString.Lazy as LB
 import qualified Data.ByteString as BS
+import qualified Data.List as Lst
 import Data.Map (Map)
 import qualified Data.Map as M
 import qualified Data.IntMap.Strict as IM
@@ -66,6 +69,10 @@ tests =
       [ testProperty "Input same as the output" sharedStringInputSameAsOutput
       , testProperty "Set of input texts is same as map length" sharedStringInputTextsIsSameAsMapLength
       , testProperty "Set of input texts is as value set length" sharedStringInputTextsIsSameAsValueSetLength
+      ],
+
+      testGroup "Reader/shared strings"
+      [ testCase "Can parse rich text values" richCellTextIsParsed
       ],
 
       testGroup "Reader/Writer"
@@ -281,5 +288,100 @@ untypedCellsAreParsedAsFloats = do
         , IM.fromList [ (1, def & cellValue ?~ CellDouble 15.0) ]
         ]
   expected @==? (_ri_cell_row . _si_row <$> items)
+
+
+richCellTextIsParsed :: IO ()
+richCellTextIsParsed = do
+  BS.writeFile "testinput.xlsx" (toBs richWorkbook)
+  runXlsxM "testinput.xlsx" $ do
+    mConduit <- getSheetConduit (makeIndex 1)
+    case mConduit of
+      Just conduit -> do
+        lst <- liftIO $ runConduitRes $ conduit .| CC.sinkList
+        let result = Lst.sort $ concatMap mkItemInfo lst
+        liftIO $ expected @==? result
+      Nothing -> error "getSheetConduit result is Nothing"
+
+  where
+
+  mkItemInfo :: SheetItem -> [(Int, Int, Maybe CellValue)]
+  mkItemInfo item =
+    let row = _si_row item
+        rowIndex = unRowIndex $ _ri_row_index row
+        mkInfo (cellIndex, cell) = (rowIndex, cellIndex, _cellValue cell)
+    in fmap mkInfo . IM.toList $ _ri_cell_row row
+
+  expected :: [(Int, Int, Maybe CellValue)]
+  expected =
+    [ (1, 1, Just $ CellText "Text at A1 Sheet1")
+    , (2, 1, Just $ CellText $ firstClauseB1 <> secondClauseB1)
+    , (2, 2, Just $ CellText $ firstClauseB2 <> secondClauseB2)
+    ]
+
+  firstClauseB1 = "First clause at B1;"
+  firstClauseB2 = "First clause at B2;"
+  secondClauseB1 = "Second clause at B1"
+  secondClauseB2 = "Second clause at B2"
+
+  richWorkbook :: Xlsx
+  richWorkbook = def & atSheet "Sheet1" ?~ toWs
+    [ ((RowIndex 1, ColumnIndex 1), cellValue ?~ CellText "Text at A1 Sheet1" $ def)
+    , ((RowIndex 2, ColumnIndex 1), cellValue ?~ cellRich firstClauseB1 secondClauseB1 $ def)
+    , ((RowIndex 2, ColumnIndex 2), cellValue ?~ cellRich firstClauseB2 secondClauseB2 $ def)
+    ]
+
+cellRich :: Text -> Text -> CellValue
+cellRich firstClause secondClause = CellRich
+  [ RichTextRun
+      { _richTextRunProperties = Just RunProperties
+          { _runPropertiesBold = Nothing
+          , _runPropertiesCharset = Just 1
+          , _runPropertiesColor = Just Color
+              { _colorAutomatic = Nothing
+              , _colorARGB = Nothing
+              , _colorTheme = Just 1
+              , _colorTint = Nothing
+              }
+          , _runPropertiesCondense = Nothing
+          , _runPropertiesExtend = Nothing
+          , _runPropertiesFontFamily = Just FontFamilySwiss
+          , _runPropertiesItalic = Nothing
+          , _runPropertiesOutline = Nothing
+          , _runPropertiesFont = Just "Aptos Narrow"
+          , _runPropertiesScheme = Nothing
+          , _runPropertiesShadow = Nothing
+          , _runPropertiesStrikeThrough = Nothing
+          , _runPropertiesSize = Just 11.0
+          , _runPropertiesUnderline = Nothing
+          , _runPropertiesVertAlign = Nothing
+          }
+      , _richTextRunText = firstClause
+      }
+  , RichTextRun
+      { _richTextRunProperties = Just RunProperties
+          { _runPropertiesBold = Just True
+          , _runPropertiesCharset = Just 1
+          , _runPropertiesColor = Just Color
+              { _colorAutomatic = Nothing
+              , _colorARGB = Just "FFFF0000"
+              , _colorTheme = Nothing
+              , _colorTint = Nothing
+              }
+          , _runPropertiesCondense = Nothing
+          , _runPropertiesExtend = Nothing
+          , _runPropertiesFontFamily = Just FontFamilySwiss
+          , _runPropertiesItalic = Nothing
+          , _runPropertiesOutline = Nothing
+          , _runPropertiesFont = Just "Arial"
+          , _runPropertiesScheme = Nothing
+          , _runPropertiesShadow = Nothing
+          , _runPropertiesStrikeThrough = Nothing
+          , _runPropertiesSize = Just 8.0
+          , _runPropertiesUnderline = Nothing
+          , _runPropertiesVertAlign = Nothing
+          }
+      , _richTextRunText = secondClause
+      }
+  ]
 
 #endif

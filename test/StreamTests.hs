@@ -23,6 +23,7 @@ tests = testGroup
 
 import qualified "zip" Codec.Archive.Zip as Zip
 import Control.Exception
+import Codec.Archive.Zip as Zip
 import Codec.Xlsx
 import Codec.Xlsx.Parser.Stream
 import Conduit ((.|))
@@ -36,10 +37,12 @@ import qualified Data.ByteString.Lazy as LB
 import qualified Data.ByteString as BS
 import qualified Data.List as Lst
 import Data.Map (Map)
+import qualified Data.Conduit.Combinators as C
 import qualified Data.Map as M
 import qualified Data.IntMap.Strict as IM
 import Data.Text (Text)
 import qualified Data.Text as Text
+import qualified Data.Vector as V
 import Diff
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase)
@@ -72,8 +75,9 @@ tests =
       ],
 
       testGroup "Reader/shared strings"
-      [ testCase "Can parse rich text values" richCellTextIsParsed
+      [ testCase "Can parse RichText values" richCellTextIsParsed
       ],
+
 
       testGroup "Reader/Writer"
       [ testCase "Write as stream, see if memory based implementation can read it" $ readWrite simpleWorkbook
@@ -88,16 +92,19 @@ tests =
       -- , testCase "Write as stream, see if memory based implementation can read it" $ readWrite testXlsx
       -- TODO forall SheetItem write that can be read
 
-      , testGroup "Conduit" [
-        testCase "Write as stream, using conduit parser (simpleWorkbook)" $ readWriteConduit simpleWorkbook
-      , testCase "Write as stream, using conduit parser (simpleWorkbookRow)" $ readWriteConduit simpleWorkbookRow
-      , testCase "Write as stream, using conduit parser (bigWorkbook)" $ readWriteConduit bigWorkbook
-      , testGroup "No sst" [
-        testCase "Write as stream, using conduit parser (simpleWorkbook)" $ readWriteConduitNoSst simpleWorkbook
-      , testCase "Write as stream, using conduit parser (simpleWorkbookRow)" $ readWriteConduitNoSst simpleWorkbookRow
-      , testCase "Write as stream, using conduit parser (bigWorkbook)" $ readWriteConduitNoSst bigWorkbook
-        ]
+      , testGroup "Conduit"
+        [ testCase "Write as stream, using conduit parser (simpleWorkbook)" $ readWriteConduit simpleWorkbook
+        , testCase "Write as stream, using conduit parser (simpleWorkbookRow)" $ readWriteConduit simpleWorkbookRow
+        , testCase "Write as stream, using conduit parser (bigWorkbook)" $ readWriteConduit bigWorkbook
+        , testGroup "No sst"
+          [ testCase "Write as stream, using conduit parser (simpleWorkbook)" $ readWriteConduitNoSst simpleWorkbook
+          , testCase "Write as stream, using conduit parser (simpleWorkbookRow)" $ readWriteConduitNoSst simpleWorkbookRow
+          , testCase "Write as stream, using conduit parser (bigWorkbook)" $ readWriteConduitNoSst bigWorkbook
           ]
+        , testGroup "Reader/shared strings"
+          [ testCase "Can parse RichText values" richCellTextIsParsedConduit
+          ]
+        ]
       ],
 
       testGroup "Reader/inline strings"
@@ -294,6 +301,35 @@ richCellTextIsParsed :: IO ()
 richCellTextIsParsed = do
   BS.writeFile "testinput.xlsx" (toBs richWorkbook)
   runXlsxM "testinput.xlsx" $ do
+    sharedStrings <- getOrParseSharedStringss
+    let result = Set.fromList $ V.toList sharedStrings
+    liftIO $ expected @==? result
+
+  where
+    expected :: Set.Set Text
+    expected = Set.fromList
+      [ textA1
+      , firstClauseB1 <> secondClauseB1
+      , firstClauseB2 <> secondClauseB2
+      ]
+
+    textA1 = "Text at A1"
+    firstClauseB1 = "First clause at B1;"
+    firstClauseB2 = "First clause at B2;"
+    secondClauseB1 = "Second clause at B1"
+    secondClauseB2 = "Second clause at B2"
+
+    richWorkbook :: Xlsx
+    richWorkbook = def & atSheet "Sheet1" ?~ toWs
+      [ ((RowIndex 1, ColumnIndex 1), cellValue ?~ CellText textA1 $ def)
+      , ((RowIndex 2, ColumnIndex 1), cellValue ?~ cellRich firstClauseB1 secondClauseB1 $ def)
+      , ((RowIndex 2, ColumnIndex 2), cellValue ?~ cellRich firstClauseB2 secondClauseB2 $ def)
+      ]
+
+richCellTextIsParsedConduit :: IO ()
+richCellTextIsParsedConduit = do
+  BS.writeFile "testinput.xlsx" (toBs richWorkbook)
+  runXlsxM "testinput.xlsx" $ do
     mConduit <- getSheetConduit (makeIndex 1)
     case mConduit of
       Just conduit -> do
@@ -313,11 +349,12 @@ richCellTextIsParsed = do
 
   expected :: [(Int, Int, Maybe CellValue)]
   expected =
-    [ (1, 1, Just $ CellText "Text at A1 Sheet1")
+    [ (1, 1, Just $ CellText textA1)
     , (2, 1, Just $ CellText $ firstClauseB1 <> secondClauseB1)
     , (2, 2, Just $ CellText $ firstClauseB2 <> secondClauseB2)
     ]
 
+  textA1 = "Text at A1"
   firstClauseB1 = "First clause at B1;"
   firstClauseB2 = "First clause at B2;"
   secondClauseB1 = "Second clause at B1"
@@ -325,7 +362,7 @@ richCellTextIsParsed = do
 
   richWorkbook :: Xlsx
   richWorkbook = def & atSheet "Sheet1" ?~ toWs
-    [ ((RowIndex 1, ColumnIndex 1), cellValue ?~ CellText "Text at A1 Sheet1" $ def)
+    [ ((RowIndex 1, ColumnIndex 1), cellValue ?~ CellText textA1 $ def)
     , ((RowIndex 2, ColumnIndex 1), cellValue ?~ cellRich firstClauseB1 secondClauseB1 $ def)
     , ((RowIndex 2, ColumnIndex 2), cellValue ?~ cellRich firstClauseB2 secondClauseB2 $ def)
     ]
